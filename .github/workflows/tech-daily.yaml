@@ -27,9 +27,34 @@ jobs:
         env:
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
         run: |
+          DATE=$(date +"%Y-%m-%d")
+          DAY_NAME=$(date +"%A")
+          DAY_OF_YEAR=$(date +"%j")
+
+           # Array of different topics/categories to rotate through
+          TOPICS=(
+            "React knowledge"
+            "JavaScript knowledge"
+            "CSS best practices"
+            "TypeScript tips"
+            "Web accessibility"
+            "Browser APIs"
+            "State management"
+            "Code splitting"
+            "Bundle optimization"
+            "Testing strategies"
+            "Error handling"
+            "Async patterns"
+            "Performance optimization"
+            "Best practices"
+          )
+          # Select topic based on day of year for deterministic daily variation
+          TOPIC_INDEX=$((DAY_OF_YEAR % ${#TOPICS[@]}))
+          SELECTED_TOPIC="${TOPICS[$TOPIC_INDEX]}"
+
           # Generate a tech tip using Cursor Agent
-          # Prompt focuses on web technologies and React, max 200 words
-          PROMPT="You are a helpful assistant specialized in web development and React. Generate a concise, practical tech tip (maximum 200 words) about web technologies or React best practices. Focus on actionable advice, performance tips, or modern patterns. Format it as a clear, engaging tip that developers can immediately apply. Include a brief title and explanation."
+          # Prompt focuses on web technologies and React, max 160 words
+          PROMPT="You are a helpful assistant specialized in web development and React. Today is $DATE ($DAY_NAME). The topic is $SELECTED_TOPIC. Generate a unique, concise, practical tech tip (maximum 160 words) that is DIFFERENT from previous tips. Focus on actionable advice, performance tips, or modern patterns. Format it as a clear, engaging tip that developers can immediately apply. Include a brief title and explanation. Make sure this tip is unique and hasn't been shared before."
           
           TIP=$(cursor-agent -p "$PROMPT" --model gpt-5 2>&1 || echo "ERROR")
           
@@ -40,7 +65,7 @@ jobs:
             TIP="💡 **React Performance Tip**\n\nUse React.memo() to prevent unnecessary re-renders of functional components. When a component receives the same props, React.memo() will skip re-rendering and reuse the last rendered result. This is especially useful for components that render frequently but don't change often.\n\nExample:\n\`\`\`jsx\nconst ExpensiveComponent = React.memo(({ data }) => {\n  // Component logic\n});\n\`\`\`\n\nRemember: Only use memo when you've confirmed a performance issue through profiling!"
           fi
           
-          # Trim to approximately 200 words if needed
+          # Trim to approximately 160 words if needed
           WORD_COUNT=$(echo "$TIP" | wc -w)
           if [ "$WORD_COUNT" -gt 250 ]; then
             TIP=$(echo "$TIP" | head -c 1000)"\n\n... (truncated)"
