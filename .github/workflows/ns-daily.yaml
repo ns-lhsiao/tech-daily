@@ -1,0 +1,266 @@
+name: Daily Netskope Knowledge Tips
+
+# This workflow fetches Netskope knowledge from Atlassian Confluence and sends daily tips to Slack
+# 
+# Note: The Atlassian MCP server (https://mcp.atlassian.com/v1/sse) uses SSE for local IDE integration.
+# In GitHub Actions, we use the Atlassian REST API directly with the same authentication credentials.
+#
+# Required GitHub Secrets:
+#   - ATLASSIAN_EMAIL: Your Atlassian account email
+#   - ATLASSIAN_API_TOKEN: Atlassian API token (create at https://id.atlassian.com/manage-profile/security/api-tokens)
+#   - ATLASSIAN_DOMAIN: Your Atlassian domain (e.g., "yourcompany" for yourcompany.atlassian.net)
+#   - SLACK_WEBHOOK_URL: Slack incoming webhook URL (optional)
+#   - CURSOR_API_KEY: Cursor API key for AI summarization (optional, will use simple summary if not provided)
+
+on:
+  schedule:
+    # Run daily at 10:00 AM UTC (1 hour after tech-daily)
+    - cron: '0 10 * * *'
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  generate-and-send:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          # Install Cursor CLI
+          curl https://cursor.com/install -fsS | bash || echo "Cursor CLI installation failed, will use fallback"
+          echo "$HOME/.cursor/bin" >> $GITHUB_PATH
+          
+          # Install Python for JSON escaping and API calls
+          sudo apt-get update && sudo apt-get install -y python3 python3-pip
+          pip3 install requests
+
+      - name: Fetch Netskope Knowledge from Atlassian
+        id: fetch_knowledge
+        env:
+          ATLASSIAN_EMAIL: ${{ secrets.ATLASSIAN_EMAIL }}
+          ATLASSIAN_API_TOKEN: ${{ secrets.ATLASSIAN_API_TOKEN }}
+          ATLASSIAN_DOMAIN: ${{ secrets.ATLASSIAN_DOMAIN }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          DATE=$(date +"%Y-%m-%d")
+          DAY_NAME=$(date +"%A")
+          DAY_OF_YEAR=$(date +"%j")
+          
+          # Create Python script to fetch and summarize Netskope knowledge
+          python3 << PYTHON_SCRIPT
+          import os
+          import json
+          import requests
+          from base64 import b64encode
+          
+          # Get credentials
+          # Note: Same credentials used by Atlassian MCP server (mcp.atlassian.com)
+          # The MCP server uses SSE for local IDE, but we use REST API in GitHub Actions
+          email = os.environ.get('ATLASSIAN_EMAIL', '')
+          api_token = os.environ.get('ATLASSIAN_API_TOKEN', '')
+          domain = os.environ.get('ATLASSIAN_DOMAIN', '')
+          cursor_api_key = os.environ.get('CURSOR_API_KEY', '')
+          
+          # Create Basic Auth header (same auth method as MCP server uses)
+          # Format: Basic base64(email:api_token)
+          auth_string = f"{email}:{api_token}"
+          auth_bytes = auth_string.encode('ascii')
+          auth_b64 = b64encode(auth_bytes).decode('ascii')
+          headers = {
+              'Authorization': f'Basic {auth_b64}',
+              'Accept': 'application/json',
+              'Content-Type': 'application/json'
+          }
+          
+          tip_content = ""
+          error_message = ""
+          
+          if not all([email, api_token, domain]):
+              error_message = "Atlassian credentials not configured"
+              print(f"⚠️ {error_message}")
+          else:
+              try:
+                  # Search for Netskope-related pages in Confluence using CQL
+                  # Adjust the CQL query based on your Confluence space structure
+                  base_url = f"https://{domain}.atlassian.net"
+                  search_url = f"{base_url}/wiki/rest/api/content/search"
+                  
+                  # CQL query to find Netskope-related content
+                  # Modify this query to match your Confluence structure
+                  # Examples:
+                  #   - Search all spaces: 'text ~ "Netskope" OR title ~ "Netskope"'
+                  #   - Search specific space: 'space = "SPACEKEY" AND (text ~ "Netskope" OR title ~ "Netskope")'
+                  #   - Search by label: 'label = "netskope"'
+                  cql_query = 'text ~ "Netskope" OR title ~ "Netskope"'
+                  
+                  params = {
+                      'cql': cql_query,
+                      'limit': 5,
+                      'expand': 'body.view,space'
+                  }
+                  
+                  response = requests.get(search_url, headers=headers, params=params, timeout=30)
+                  
+                  if response.status_code == 200:
+                      results = response.json()
+                      pages = results.get('results', [])
+                      
+                      if pages:
+                          # Select a page based on day of year for variation
+                          day_of_year = int(os.environ.get('DAY_OF_YEAR', '1'))
+                          selected_page = pages[day_of_year % len(pages)]
+                          
+                          page_title = selected_page.get('title', 'Netskope Knowledge')
+                          page_body = selected_page.get('body', {}).get('view', {}).get('value', '')
+                          
+                          # Extract text content (remove HTML tags roughly)
+                          import re
+                          # Remove HTML tags
+                          text_content = re.sub(r'<[^>]+>', ' ', page_body)
+                          # Clean up whitespace
+                          text_content = ' '.join(text_content.split())
+                          # Limit content length
+                          if len(text_content) > 2000:
+                              text_content = text_content[:2000] + "..."
+                          
+                          # Use Cursor Agent to summarize if available
+                          if cursor_api_key:
+                              import subprocess
+                              prompt = f"Summarize the following Netskope knowledge into a concise, practical tip (maximum 160 words). Focus on actionable insights, best practices, or key learnings. Format it clearly with a title and explanation.\n\nSource: {page_title}\n\nContent: {text_content}"
+                              
+                              try:
+                                  result = subprocess.run(
+                                      ['cursor-agent', '-p', prompt, '--model', 'gpt-4o-mini'],
+                                      capture_output=True,
+                                      text=True,
+                                      timeout=60,
+                                      env={**os.environ, 'CURSOR_API_KEY': cursor_api_key}
+                                  )
+                                  
+                                  if result.returncode == 0 and result.stdout:
+                                      tip_content = result.stdout.strip()
+                                  else:
+                                      # Fallback: simple summary
+                                      tip_content = f"📚 **{page_title}**\n\n{text_content[:500]}..."
+                              except Exception as e:
+                                  # Fallback: simple summary
+                                  tip_content = f"📚 **{page_title}**\n\n{text_content[:500]}..."
+                          else:
+                              # Simple summary without Cursor Agent
+                              tip_content = f"📚 **{page_title}**\n\n{text_content[:500]}..."
+                          
+                          print(f"✅ Fetched knowledge from: {page_title}")
+                      else:
+                          error_message = "No Netskope pages found in Confluence"
+                          print(f"⚠️ {error_message}")
+                  else:
+                      error_message = f"Failed to fetch from Atlassian API: {response.status_code}"
+                      print(f"⚠️ {error_message}")
+                      print(f"Response: {response.text[:200]}")
+                      
+              except Exception as e:
+                  error_message = f"Error fetching knowledge: {str(e)}"
+                  print(f"⚠️ {error_message}")
+          
+          # Output tip content to GitHub Actions output
+          output_file = os.environ.get('GITHUB_OUTPUT', '/dev/stdout')
+          
+          if not tip_content:
+              # Use fallback tip
+              tip_content = "💡 **Netskope Security Tip**\n\nNetskope is a cloud security platform that provides comprehensive protection for cloud applications and services. Key features include:\n\n- **Cloud Access Security Broker (CASB)**: Monitors and controls cloud application usage\n- **Secure Web Gateway (SWG)**: Protects users from web-based threats\n- **Zero Trust Network Access (ZTNA)**: Provides secure access to private applications\n\nBest practice: Regularly review your Netskope policies to ensure they align with your organization's security requirements and compliance needs."
+              print("⚠️ Using fallback tip")
+          
+          # Write to GitHub Actions output using multiline format
+          with open(output_file, 'a') as f:
+              f.write("tip<<EOF\n")
+              f.write(tip_content)
+              f.write("\nEOF\n")
+          
+          print(f"✅ Tip content prepared (length: {len(tip_content)} characters)")
+          
+          PYTHON_SCRIPT
+
+      - name: Format and Send to Slack
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          TIP: ${{ steps.fetch_knowledge.outputs.tip }}
+        run: |
+          DATE=$(date +"%Y-%m-%d")
+          
+          # Get tip from previous step output
+          TIP="${{ steps.fetch_knowledge.outputs.tip }}"
+          
+          # Use Python to properly escape JSON and create Slack message
+          python3 << PYTHON_SCRIPT
+          import json
+          import os
+          
+          tip = os.environ.get('TIP', '')
+          date = os.environ.get('DATE', '')
+          
+          # Build Slack message blocks
+          message = {
+              "text": f"🛡️ Daily Netskope Knowledge - {date}",
+              "blocks": [
+                  {
+                      "type": "header",
+                      "text": {
+                          "type": "plain_text",
+                          "text": f"🛡️ Daily Netskope Knowledge - {date}"
+                      }
+                  },
+                  {
+                      "type": "section",
+                      "text": {
+                          "type": "mrkdwn",
+                          "text": tip
+                      }
+                  },
+                  {
+                      "type": "divider"
+                  },
+                  {
+                      "type": "context",
+                      "elements": [
+                          {
+                              "type": "mrkdwn",
+                              "text": "💡 Fetched from Atlassian Confluence | #netskope-daily"
+                          }
+                      ]
+                  }
+              ]
+          }
+          
+          # Write JSON to file
+          with open('/tmp/slack_message.json', 'w') as f:
+              json.dump(message, f, ensure_ascii=False)
+          
+          print("✅ JSON payload created")
+          PYTHON_SCRIPT
+          
+          # Check if Slack webhook URL is available
+          if [ -z "$SLACK_WEBHOOK_URL" ] || [ "$SLACK_WEBHOOK_URL" = "" ]; then
+            echo "⚠️ Slack webhook URL not configured, printing message instead:"
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "🛡️ Daily Netskope Knowledge - $DATE"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
+            echo "$TIP"
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "💡 Fetched from Atlassian Confluence | #netskope-daily"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
+            echo "📋 JSON payload (for when webhook is ready):"
+            cat /tmp/slack_message.json
+          else
+            # Send to Slack
+            curl -X POST -H 'Content-type: application/json' \
+              --data @/tmp/slack_message.json \
+              "$SLACK_WEBHOOK_URL"
+            
+            echo "✅ Netskope knowledge tip sent to Slack successfully!"
+          fi
+
