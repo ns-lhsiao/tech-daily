@@ -113,13 +113,14 @@ jobs:
                           
                           page_title = selected_page.get('title', 'Netskope Knowledge')
                           page_body = selected_page.get('body', {}).get('view', {}).get('value', '')
-                          
+                          print(f"✅ Fetched body from: {page_body}")
                           # Extract text content (remove HTML tags roughly)
                           import re
                           # Remove HTML tags
                           text_content = re.sub(r'<[^>]+>', ' ', page_body)
                           # Clean up whitespace
                           text_content = ' '.join(text_content.split())
+                          print(f"✅ Fetched text_content from: {text_content}")
                           # Limit content length
                           if len(text_content) > 2000:
                               text_content = text_content[:2000] + "..."
@@ -181,86 +182,86 @@ jobs:
           
           PYTHON_SCRIPT
 
-      - name: Format and Send to Slack
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          TIP: ${{ steps.fetch_knowledge.outputs.tip }}
-        run: |
-          DATE=$(date +"%Y-%m-%d")
+      # - name: Format and Send to Slack
+      #   env:
+      #     SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      #     TIP: ${{ steps.fetch_knowledge.outputs.tip }}
+      #   run: |
+      #     DATE=$(date +"%Y-%m-%d")
           
-          # Get tip from previous step output
-          TIP="${{ steps.fetch_knowledge.outputs.tip }}"
+      #     # Get tip from previous step output
+      #     TIP="${{ steps.fetch_knowledge.outputs.tip }}"
           
-          # Use Python to properly escape JSON and create Slack message
-          python3 << PYTHON_SCRIPT
-          import json
-          import os
+      #     # Use Python to properly escape JSON and create Slack message
+      #     python3 << PYTHON_SCRIPT
+      #     import json
+      #     import os
           
-          tip = os.environ.get('TIP', '')
-          date = os.environ.get('DATE', '')
+      #     tip = os.environ.get('TIP', '')
+      #     date = os.environ.get('DATE', '')
           
-          # Build Slack message blocks
-          message = {
-              "text": f"🛡️ Daily Netskope Knowledge - {date}",
-              "blocks": [
-                  {
-                      "type": "header",
-                      "text": {
-                          "type": "plain_text",
-                          "text": f"🛡️ Daily Netskope Knowledge - {date}"
-                      }
-                  },
-                  {
-                      "type": "section",
-                      "text": {
-                          "type": "mrkdwn",
-                          "text": tip
-                      }
-                  },
-                  {
-                      "type": "divider"
-                  },
-                  {
-                      "type": "context",
-                      "elements": [
-                          {
-                              "type": "mrkdwn",
-                              "text": "💡 Fetched from Atlassian Confluence | #netskope-daily"
-                          }
-                      ]
-                  }
-              ]
-          }
+      #     # Build Slack message blocks
+      #     message = {
+      #         "text": f"🛡️ Daily Netskope Knowledge - {date}",
+      #         "blocks": [
+      #             {
+      #                 "type": "header",
+      #                 "text": {
+      #                     "type": "plain_text",
+      #                     "text": f"🛡️ Daily Netskope Knowledge - {date}"
+      #                 }
+      #             },
+      #             {
+      #                 "type": "section",
+      #                 "text": {
+      #                     "type": "mrkdwn",
+      #                     "text": tip
+      #                 }
+      #             },
+      #             {
+      #                 "type": "divider"
+      #             },
+      #             {
+      #                 "type": "context",
+      #                 "elements": [
+      #                     {
+      #                         "type": "mrkdwn",
+      #                         "text": "💡 Fetched from Atlassian Confluence | #netskope-daily"
+      #                     }
+      #                 ]
+      #             }
+      #         ]
+      #     }
           
-          # Write JSON to file
-          with open('/tmp/slack_message.json', 'w') as f:
-              json.dump(message, f, ensure_ascii=False)
+      #     # Write JSON to file
+      #     with open('/tmp/slack_message.json', 'w') as f:
+      #         json.dump(message, f, ensure_ascii=False)
           
-          print("✅ JSON payload created")
-          PYTHON_SCRIPT
+      #     print("✅ JSON payload created")
+      #     PYTHON_SCRIPT
           
-          # Check if Slack webhook URL is available
-          if [ -z "$SLACK_WEBHOOK_URL" ] || [ "$SLACK_WEBHOOK_URL" = "" ]; then
-            echo "⚠️ Slack webhook URL not configured, printing message instead:"
-            echo ""
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "🛡️ Daily Netskope Knowledge - $DATE"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo ""
-            echo "$TIP"
-            echo ""
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "💡 Fetched from Atlassian Confluence | #netskope-daily"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo ""
-            echo "📋 JSON payload (for when webhook is ready):"
-            cat /tmp/slack_message.json
-          else
-            # Send to Slack
-            curl -X POST -H 'Content-type: application/json' \
-              --data @/tmp/slack_message.json \
-              "$SLACK_WEBHOOK_URL"
+      #     # Check if Slack webhook URL is available
+      #     if [ -z "$SLACK_WEBHOOK_URL" ] || [ "$SLACK_WEBHOOK_URL" = "" ]; then
+      #       echo "⚠️ Slack webhook URL not configured, printing message instead:"
+      #       echo ""
+      #       echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      #       echo "🛡️ Daily Netskope Knowledge - $DATE"
+      #       echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      #       echo ""
+      #       echo "$TIP"
+      #       echo ""
+      #       echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      #       echo "💡 Fetched from Atlassian Confluence | #netskope-daily"
+      #       echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      #       echo ""
+      #       echo "📋 JSON payload (for when webhook is ready):"
+      #       cat /tmp/slack_message.json
+      #     else
+      #       # Send to Slack
+      #       curl -X POST -H 'Content-type: application/json' \
+      #         --data @/tmp/slack_message.json \
+      #         "$SLACK_WEBHOOK_URL"
             
-            echo "✅ Netskope knowledge tip sent to Slack successfully!"
-          fi
+      #       echo "✅ Netskope knowledge tip sent to Slack successfully!"
+      #     fi
 
