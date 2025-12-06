@@ -56,7 +56,7 @@ jobs:
           # Prompt focuses on web technologies and React, max 160 words
           PROMPT="You are a helpful assistant specialized in web development and React. Today is $DATE ($DAY_NAME). The topic is $SELECTED_TOPIC. Generate a unique, concise, practical tech tip (maximum 160 words) that is DIFFERENT from previous tips. Focus on actionable advice, performance tips, or modern patterns. Format it as a clear, engaging tip that developers can immediately apply. Include a brief title and explanation. Make sure this tip is unique and hasn't been shared before."
           
-          TIP=$(cursor-agent -p "$PROMPT" --model gpt-5 2>&1 || echo "ERROR")
+          TIP=$(cursor-agent -p "$PROMPT" --model sonnet-4.5 2>&1 || echo "ERROR")
           
           # Fallback if Cursor Agent fails
           if [ -z "$TIP" ] || [ "$TIP" = "ERROR" ] || echo "$TIP" | grep -q "error\|Error\|ERROR\|failed\|Failed"; then
