@@ -12,11 +12,11 @@ name: Daily Netskope Knowledge Tips
 #   - SLACK_WEBHOOK_URL: Slack incoming webhook URL (optional)
 #   - CURSOR_API_KEY: Cursor API key for AI summarization (optional, will use simple summary if not provided)
 
-on:
-  schedule:
-    # Run daily at 10:00 AM UTC (1 hour after tech-daily)
-    - cron: '0 10 * * *'
-  workflow_dispatch: # Allow manual triggering
+# on:
+#   schedule:
+#     # Run daily at 10:00 AM UTC (1 hour after tech-daily)
+#     - cron: '0 10 * * *'
+#   workflow_dispatch: # Allow manual triggering
 
 jobs:
   generate-and-send:
@@ -264,4 +264,3 @@ jobs:
             
       #       echo "✅ Netskope knowledge tip sent to Slack successfully!"
       #     fi
-
