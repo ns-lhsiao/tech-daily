@@ -1,10 +1,10 @@
 name: Daily Tech Tips
 
-on:
-  schedule:
-    # Run daily at 9:00 AM UTC (adjust timezone as needed)
-    - cron: '0 9 * * *'
-  workflow_dispatch: # Allow manual triggering
+# on:
+#   schedule:
+#     # Run daily at 9:00 AM UTC (adjust timezone as needed)
+#     - cron: '0 9 * * *'
+#   workflow_dispatch: # Allow manual triggering
 
 jobs:
   generate-and-send:
