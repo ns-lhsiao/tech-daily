@@ -7,7 +7,7 @@ import os
 import random
 import re
 import textwrap
-from datetime import datetime
+from datetime import UTC, datetime
 from urllib.request import Request, urlopen
 
 RULES_API = "https://api.github.com/repos/vercel-labs/agent-skills/contents/skills/react-best-practices/rules"
@@ -26,17 +26,22 @@ def fetch_text(url: str) -> str:
         return response.read().decode("utf-8", errors="replace")
 
 
-def summarize_rule(markdown_text: str):
-    lines = markdown_text.splitlines()
+def _extract_title(markdown_text: str, lines):
+    frontmatter_title = re.search(r"^title:\s*(.+)$", markdown_text, flags=re.MULTILINE)
+    if frontmatter_title:
+        return frontmatter_title.group(1).strip().strip('"')
 
-    title = None
     for line in lines:
-        if line.startswith("# "):
-            title = line[2:].strip()
-            break
+        if re.match(r"^#{1,6}\s+", line):
+            return re.sub(r"^#{1,6}\s+", "", line).strip()
 
+    return None
+
+
+def _extract_bullets(lines):
     bullets = []
     in_code = False
+
     for line in lines:
         stripped = line.strip()
         if stripped.startswith("```"):
@@ -47,9 +52,13 @@ def summarize_rule(markdown_text: str):
         if stripped.startswith("- ") or stripped.startswith("* "):
             bullets.append(re.sub(r"^[-*]\s+", "", stripped))
 
-    paragraph = ""
+    return bullets
+
+
+def _extract_summary_paragraph(lines):
     cleaned = []
     in_code = False
+
     for line in lines:
         stripped = line.strip()
         if stripped.startswith("```"):
@@ -60,8 +69,18 @@ def summarize_rule(markdown_text: str):
         if stripped.startswith("#") or stripped.startswith("-") or stripped.startswith("*"):
             continue
         cleaned.append(stripped)
-    if cleaned:
-        paragraph = " ".join(cleaned)
+
+    if not cleaned:
+        return ""
+
+    return " ".join(cleaned)
+
+
+def summarize_rule(markdown_text: str):
+    lines = markdown_text.splitlines()
+    title = _extract_title(markdown_text, lines)
+    bullets = _extract_bullets(lines)
+    paragraph = _extract_summary_paragraph(lines)
 
     if bullets:
         summary_items = bullets[:3]
@@ -75,8 +94,84 @@ def summarize_rule(markdown_text: str):
     return title, summary
 
 
+def _collect_example_labels(markdown_text: str):
+    label_pattern = re.compile(
+        r"(?im)^\s*(?:\*\*(?P<bold>[^*\n]+)\*\*|#{1,6}\s*(?P<heading>[^\n]+))\s*$"
+    )
+
+    labels = []
+    for match in label_pattern.finditer(markdown_text):
+        raw = (match.group("bold") or match.group("heading") or "").strip().lower()
+        if "incorrect" in raw:
+            labels.append((match.start(), "incorrect"))
+        elif "correct" in raw:
+            labels.append((match.start(), "correct"))
+
+    labels.sort(key=lambda item: item[0])
+    return labels
+
+
+def _label_for_position(labels, position):
+    section = ""
+    for label_pos, label in labels:
+        if label_pos < position:
+            section = label
+        else:
+            break
+    return section
+
+
+def _collect_example_samples(markdown_text: str, labels):
+    code_pattern = re.compile(r"(?s)```(?P<lang>[^\n`]*)\n(?P<code>.*?)\n```")
+    samples = {"incorrect": None, "correct": None}
+
+    for code_match in code_pattern.finditer(markdown_text):
+        section = _label_for_position(labels, code_match.start())
+        if section not in samples or samples[section]:
+            continue
+
+        lang = (code_match.group("lang") or "tsx").strip() or "tsx"
+        code = (code_match.group("code") or "").strip()
+        if not code:
+            continue
+
+        samples[section] = {"lang": lang, "code": code}
+        if samples["incorrect"] and samples["correct"]:
+            break
+
+    return samples
+
+
+def extract_examples(markdown_text: str):
+    """Extract first Incorrect/Correct code samples from markdown headings."""
+    labels = _collect_example_labels(markdown_text)
+    samples = _collect_example_samples(markdown_text, labels)
+    return samples["incorrect"], samples["correct"]
+
+
+def _pick_rule_with_examples(rule_files):
+    chosen = None
+
+    for candidate in rule_files:
+        download_url = candidate.get("download_url")
+        if not download_url:
+            continue
+
+        markdown = fetch_text(download_url)
+        incorrect_sample, correct_sample = extract_examples(markdown)
+        has_both_samples = bool(incorrect_sample and correct_sample)
+
+        if has_both_samples:
+            return candidate, markdown, incorrect_sample, correct_sample
+
+        if chosen is None:
+            chosen = (candidate, markdown, incorrect_sample, correct_sample)
+
+    return chosen
+
+
 def get_date_context():
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     date = os.environ.get("DATE", now.strftime("%Y-%m-%d"))
     day_name = os.environ.get("DAY_NAME", now.strftime("%A"))
     day_of_year = int(os.environ.get("DAY_OF_YEAR", now.strftime("%j")))
@@ -96,23 +191,40 @@ def build_tip() -> str:
             raise RuntimeError("No markdown rule files found")
 
         random.seed(day_of_year)
-        selected = random.choice(rule_files)
-        rule_name = selected.get("name", "unknown-rule.md")
-        rule_download_url = selected.get("download_url")
-        rule_web_url = f"{RULES_WEB_BASE}/{rule_name}"
-        if not rule_download_url:
-            raise RuntimeError("Rule download URL is missing")
+        random.shuffle(rule_files)
 
-        markdown = fetch_text(rule_download_url)
+        chosen = _pick_rule_with_examples(rule_files)
+        if chosen is None:
+            raise RuntimeError("Could not fetch any valid rule markdown")
+
+        selected, markdown, incorrect_sample, correct_sample = chosen
+        rule_name = selected.get("name", "unknown-rule.md")
+        rule_web_url = f"{RULES_WEB_BASE}/{rule_name}"
         title, summary = summarize_rule(markdown)
         if not title:
             title = rule_name.replace(".md", "").replace("-", " ").title()
+
+        examples = ""
+        if incorrect_sample or correct_sample:
+            parts = []
+            if incorrect_sample:
+                parts.append(
+                    "Incorrect:\n"
+                    f"```{incorrect_sample['lang']}\n{incorrect_sample['code']}\n```"
+                )
+            if correct_sample:
+                parts.append(
+                    "Correct:\n"
+                    f"```{correct_sample['lang']}\n{correct_sample['code']}\n```"
+                )
+            examples = "\n\nExamples:\n" + "\n\n".join(parts)
 
         return (
             f"React Best Practice of the Day ({date} - {day_name})\n\n"
             f"{title}\n"
             f"Source: <{rule_web_url}|{rule_name}>\n\n"
             f"Quick summary:\n{summary}"
+            f"{examples}"
         )
     except Exception as exc:
         return (
@@ -139,7 +251,7 @@ def write_tip_output(tip: str):
 
 def write_slack_payload(output_file: str):
     tip = os.environ.get("TIP", "")
-    date = os.environ.get("DATE", datetime.utcnow().strftime("%Y-%m-%d"))
+    date = os.environ.get("DATE", datetime.now(UTC).strftime("%Y-%m-%d"))
 
     message = {
         "text": f"Daily Tech Tip - {date}",
