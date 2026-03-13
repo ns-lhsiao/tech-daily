@@ -15,68 +15,17 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # Install Cursor CLI
-          curl https://cursor.com/install -fsS | bash || echo "Cursor CLI installation failed, will use fallback"
-          echo "$HOME/.cursor/bin" >> $GITHUB_PATH
-          
-          # Install Python for JSON escaping
+          # Install Python for rule fetching and JSON formatting
           sudo apt-get update && sudo apt-get install -y python3
 
       - name: Generate Tech Tip
         id: generate_tip
-        env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
         run: |
           DATE=$(date +"%Y-%m-%d")
           DAY_NAME=$(date +"%A")
           DAY_OF_YEAR=$(date +"%j")
-
-           # Array of different topics/categories to rotate through
-          TOPICS=(
-            "React knowledge"
-            "JavaScript knowledge"
-            "CSS best practices"
-            "TypeScript tips"
-            "Web accessibility"
-            "Browser APIs"
-            "State management"
-            "Code splitting"
-            "Bundle optimization"
-            "Testing strategies"
-            "Error handling"
-            "Async patterns"
-            "Performance optimization"
-            "Best practices"
-          )
-          # Select topic based on day of year for deterministic daily variation
-          TOPIC_INDEX=$((DAY_OF_YEAR % ${#TOPICS[@]}))
-          SELECTED_TOPIC="${TOPICS[$TOPIC_INDEX]}"
-
-          # Generate a tech tip using Cursor Agent
-          # Prompt focuses on web technologies and React, max 160 words
-          PROMPT="You are a helpful assistant specialized in web development and React. Today is $DATE ($DAY_NAME). The topic is $SELECTED_TOPIC. Generate a unique, concise, practical tech tip (maximum 160 words) that is DIFFERENT from previous tips. Focus on actionable advice, performance tips, or modern patterns. Format it as a clear, engaging tip that developers can immediately apply. Include a brief title and explanation. Make sure this tip is unique and hasn't been shared before."
-          
-          TIP=$(cursor-agent -p "$PROMPT" --model sonnet-4.5 2>&1 || echo "ERROR")
-          
-          # Fallback if Cursor Agent fails
-          if [ -z "$TIP" ] || [ "$TIP" = "ERROR" ] || echo "$TIP" | grep -q "error\|Error\|ERROR\|failed\|Failed"; then
-            echo "⚠️ Cursor Agent failed, using fallback tip"
-            echo "Debug error: $TIP"
-            TIP="💡 **React Performance Tip**\n\nUse React.memo() to prevent unnecessary re-renders of functional components. When a component receives the same props, React.memo() will skip re-rendering and reuse the last rendered result. This is especially useful for components that render frequently but don't change often.\n\nExample:\n\`\`\`jsx\nconst ExpensiveComponent = React.memo(({ data }) => {\n  // Component logic\n});\n\`\`\`\n\nRemember: Only use memo when you've confirmed a performance issue through profiling!"
-          fi
-          
-          # Trim to approximately 160 words if needed
-          WORD_COUNT=$(echo "$TIP" | wc -w)
-          if [ "$WORD_COUNT" -gt 250 ]; then
-            TIP=$(echo "$TIP" | head -c 1000)"\n\n... (truncated)"
-          fi
-          
-          # Escape special characters for JSON (handle multiline)
-          TIP_ESCAPED=$(echo "$TIP" | sed 's/"/\\"/g' | sed 's/$/\\n/' | tr -d '\n' | sed 's/\\n$//')
-          
-          echo "tip<<EOF" >> $GITHUB_OUTPUT
-          echo -e "$TIP_ESCAPED" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          export DATE DAY_NAME DAY_OF_YEAR
+          python3 utils/tech_daily.py generate-tip
 
       - name: Format and Send to Slack
         env:
@@ -84,54 +33,10 @@ jobs:
           TIP: ${{ steps.generate_tip.outputs.tip }}
         run: |
           DATE=$(date +"%Y-%m-%d")
-          
-          # Use Python to properly escape JSON and create Slack message
-          python3 << PYTHON_SCRIPT
-          import json
-          import os
-          
-          tip = os.environ.get('TIP', '')
-          date = os.environ.get('DATE', '')
-          
-          # Build Slack message blocks
-          message = {
-              "text": f"📚 Daily Tech Tip - {date}",
-              "blocks": [
-                  {
-                      "type": "header",
-                      "text": {
-                          "type": "plain_text",
-                          "text": f"📚 Daily Tech Tip - {date}"
-                      }
-                  },
-                  {
-                      "type": "section",
-                      "text": {
-                          "type": "mrkdwn",
-                          "text": tip
-                      }
-                  },
-                  {
-                      "type": "divider"
-                  },
-                  {
-                      "type": "context",
-                      "elements": [
-                          {
-                              "type": "mrkdwn",
-                              "text": "💡 Generated by GitHub Actions | #tech-daily"
-                          }
-                      ]
-                  }
-              ]
-          }
-          
-          # Write JSON to file
-          with open('/tmp/slack_message.json', 'w') as f:
-              json.dump(message, f, ensure_ascii=False)
-          
-          print("✅ JSON payload created")
-          PYTHON_SCRIPT
+          export DATE
+
+          # Use Python utility to properly escape JSON and create Slack message
+          python3 utils/tech_daily.py format-slack --output /tmp/slack_message.json
           
           # Check if Slack webhook URL is available
           if [ -z "$SLACK_WEBHOOK_URL" ] || [ "$SLACK_WEBHOOK_URL" = "" ]; then
